@@ -1,18 +1,19 @@
-pipeline{
+pipeline {
     agent any
     tools {
         jdk 'jdk'
         nodejs 'nodejs'
     }
-
+    
     environment {
-        SCANNER_HOME = tools 'sonar-scanner'
+        SCANNER_HOME=tool 'sonar-scanner'
         AWS_ACCOUNT_ID = credentials('ACCOUNT_ID')
-        AWS_ECR_REPO_NAME = credentials('ECR_REPO1')
+        AWS_ECR_REPO_NAME = credentials('ECR_REPO2')
         AWS_DEFAULT_REGION = 'ap-southeast-2'
         REPOSITORY_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/"
         RELEASE = "1.0.0"
         IMAGE_TAG = "${RELEASE}-${BUILD_NUMBER}"
+        NVD_API_KEY = credentials('NVD_API_KEY')
     }
 
     stages {
@@ -21,12 +22,11 @@ pipeline{
                 cleanWs()
             }
         }
-
         stage('Checkout From Git') {
             steps {
                 git branch: 'main', credentialsId: 'github-token', url: 'https://github.com/Barney7777/Three-Tier-App-DevSecOps-Kubernetes-.git'
             }
-
+        }
         stage('Sonarqube Analysis') {
             steps {
                 dir('Application-Code/backend') {
@@ -38,102 +38,105 @@ pipeline{
                 }
             }
         }
-
         stage('Quality Gate') {
             steps {
                 script {
-                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token' 
+                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token'
                 }
             }
         }
-
         stage('Install Dependencies') {
             steps {
-                sh 'npm install'
-            }
-        }
-
-        stage ('OWASP Depedency-Check Scan') {
-            steps {
-                dir ('Application-Code/frontend') {
-                    dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', odcInstallation: 'DP-Check'
-                    dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+                dir('Application-Code/backend') {
+                    sh 'npm install'
                 }
             }
         }
-
-        stage ('Trivy File Scan') {
+        stage ('OWASP Depedency-Check Scan') {
             steps {
-                dir('Application-Code/frontend') {
+                dir('Application-Code/backend') {
+                    withCredentials([string(credentialsId: 'NVD_API_KEY', variable: 'NVD_API_KEY')]) {
+                        // Run dependencyCheck with NVD API key
+                        dependencyCheck additionalArguments: "--scan ./ --disableYarnAudit --disableNodeAudit --nvdApiKey ${NVD_API_KEY}", odcInstallation: 'DP-Check'
+                        dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+                    }
+                }
+            }
+        }
+        stage('Trivy File Scan') {
+            steps {
+                dir('Application-Code/backend') {
                     sh 'trivy fs . > trivyfs.json'
                 }
             }
         }
-
-        stage ('Docker Image Build') {
+        stage('Docker Image Build') {
             steps {
                 script {
-                    dir('Application-Code/frontend') {
+                    dir('Application-Code/backend') {
                         sh "docker build -t ${AWS_ECR_REPO_NAME}:${IMAGE_TAG} ."
                     }
                 }
             }
         }
-
-        stage ('ECR Image Pushing') {
+        stage('ECR Image Pushing')  {
             steps {
                 script {
                     sh "aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${REPOSITORY_URI}"
-                    sh "docker tag ${AWS_ECR_REPO_NAME} ${REPOSITORY_URI}${AWS_ECR_REPO_NAME}:${IMAGE_TAG}"
-                    SH "docker push ${REPOSITORY_URI}${AWS_ECR_REPO_NAME}:${IMAGE_TAG}"
+                    sh "docker tag ${AWS_ECR_REPO_NAME}:${IMAGE_TAG} ${REPOSITORY_URI}${AWS_ECR_REPO_NAME}:${IMAGE_TAG}"
+                    sh "docker push ${REPOSITORY_URI}${AWS_ECR_REPO_NAME}:${IMAGE_TAG}"
                 }
             }
         }
-
-        stage ('Trivy Image Scan') {
+        stage('Trivy Image Scan') {
             steps {
                 sh "trivy image ${REPOSITORY_URI}${AWS_ECR_REPO_NAME}:${IMAGE_TAG} > trivyimage.json"
             }
         }
-
-        stage ('Cleanup Artifacts') {
-            sh "docker rmi ${AWS_ECR_REPO_NAME}:${IMAGE_TAG}"
-            sh "docker rmi ${REPOSITORY_URI}${AWS_ECR_REPO_NAME}:${IMAGE_TAG}"
+        stage('Cleanup Artifacts') {
+            steps {
+                script {
+                    sh "docker rmi ${AWS_ECR_REPO_NAME}:${IMAGE_TAG}"
+                    sh "docker rmi ${REPOSITORY_URI}${AWS_ECR_REPO_NAME}:${IMAGE_TAG}"
+                }
+            }
         }
-
-        stage('Checkout Code From GitOps') {
+        stage('Checkout code from GitOps Repo') {
             steps {
                 git branch: 'main', credentialsId: 'github-token', url: 'https://github.com/Barney7777/Three-Tier-App-K8s-GitOps.git'
             }
         }
-
-        stage ('Update Deployment File') {
+        stage('Update Deployment file') {
+            steps {
+                dir('Backend') {
+                    sh """
+                        cat deployment.yaml
+                        sed -i 's|image: .*|image: ${REPOSITORY_URI}${AWS_ECR_REPO_NAME}:${IMAGE_TAG}|' deployment.yaml
+                        cat deployment.yaml
+                    """
+                }
+            }
+        }
+        stage('Push the changed deployment file to Github') {
             environment {
                 GIT_REPO_NAME = "Three-Tier-App-K8s-GitOps"
-                GIT_USER_NAME = "Barneywang7777"
+                GIT_USER_NAME = "Barney7777" 
             }
             steps {
-                dir('Kubernetes-Manifests/Frontend') {
+                dir('Backend') {
+                    sh """
+                        git config --global user.name "Barney7777"
+                        git config --global user.email "wangyaxu7@gmail.com"
+                        git add deployment.yaml
+                        git commit -m "Update deployment Image to version \${IMAGE_TAG}"
+                    """
                     withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
-                        sh '''
-                            git config --global user.name "Barney7777"
-                            git config --global user.email "wangyaxu7@gmail.com"
-                            BUILD_NUMBER=${BUILD_NUMBER}
-                            echo $BUILD_NUMBER
-                            imageTag=$(grep -oP '(?<=frontend:)[^ ]+' deployment.yaml)
-                            echo $imageTag
-                            sed -i "s/${AWS_ECR_REPO_NAME}:${imageTag}/${AWS_ECR_REPO_NAME}:${BUILD_NUMBER}/" deployment.yaml
-                            git add deployment.yaml
-                            git commit -m "Update deployment Image to version \${BUILD_NUMBER}"
-                            git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} HEAD:main
-                        '''
+                        sh "git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} main"
                     }
-
                 }
             }
         }
     }
-
     post {
         always {
            emailext attachLog: true,
