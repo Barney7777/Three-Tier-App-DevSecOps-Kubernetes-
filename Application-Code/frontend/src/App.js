@@ -1,10 +1,45 @@
-import React from "react";
-import Tasks from "./Tasks";
+import React, { Component } from "react";
 import { Paper, TextField, Checkbox, Button } from "@material-ui/core";
 import "./App.css"; // Update your CSS file accordingly
 
-class App extends Tasks {
-    state = { tasks: [], currentTask: "" };
+class App extends Component {
+    state = {
+        tasks: [],
+        currentTask: ""
+    };
+
+    handleChange = (e) => {
+        this.setState({ currentTask: e.target.value });
+    };
+
+    handleSubmit = (e) => {
+        e.preventDefault();
+        const { tasks, currentTask } = this.state;
+        if (!currentTask.trim()) return;
+        const newTask = {
+            _id: tasks.length + 1, // You may need to generate a unique ID here
+            task: currentTask,
+            completed: false
+        };
+        this.setState({
+            tasks: [...tasks, newTask],
+            currentTask: ""
+        });
+    };
+
+    handleUpdate = (taskId) => {
+        this.setState((prevState) => ({
+            tasks: prevState.tasks.map((task) =>
+                task._id === taskId ? { ...task, completed: !task.completed } : task
+            )
+        }));
+    };
+
+    handleDelete = (taskId) => {
+        this.setState((prevState) => ({
+            tasks: prevState.tasks.filter((task) => task._id !== taskId)
+        }));
+    };
 
     render() {
         const { tasks, currentTask } = this.state;
@@ -54,4 +89,3 @@ class App extends Tasks {
 }
 
 export default App;
-
