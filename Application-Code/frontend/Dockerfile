@@ -1,4 +1,4 @@
-# # Stage1: Build the app
+# Stage1: Build the app
 # FROM node:14-alpine AS builder
 # WORKDIR /usr/src/app
 # COPY ./package*.json ./
@@ -17,9 +17,8 @@ WORKDIR /usr/src/app
 COPY package*.json ./
 RUN npm install
 COPY . .
-RUN npm run build
 EXPOSE 3000
-CMD [ "npm", "run", "start" ]
+CMD [ "npm", "start" ]
 
 
 
